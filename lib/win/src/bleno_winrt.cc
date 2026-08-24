@@ -196,17 +196,6 @@ std::vector<ServiceDefinition> ParseServices(const Napi::Array& services) {
     return result;
 }
 
-winrt::fire_and_forget NotifyClient(
-    GattLocalCharacteristic characteristic,
-    GattSubscribedClient client,
-    Data data) {
-    try {
-        co_await characteristic.NotifyValueAsync(ToBuffer(data), client);
-    } catch (...) {
-        // The client may have unsubscribed between the JS callback and this send.
-    }
-}
-
 }  // namespace
 
 BLEPeripheralManager::BLEPeripheralManager(
@@ -648,19 +637,68 @@ void BLEPeripheralManager::HandleSubscribersChanged(
         for (const auto& subscriber : current) {
             if (context->subscribers.find(subscriber.first) ==
                 context->subscribers.end()) {
-                auto characteristic = context->characteristic;
+                auto connection = subscriber.first;
                 auto client = subscriber.second;
+                // Notifications enqueue onto the characteristic's send queue;
+                // a single drain coroutine sends them in order, one
+                // NotifyValueAsync in flight at a time, and emits 'notify'
+                // (connection, success) as each completes — the same per-send
+                // event contract the HCI transport honours, which is what
+                // gives callers ordering and flow control (a fire-and-forget
+                // send let a fast producer overrun the stack's queue).
                 context->emitter->Subscribe(
-                    subscriber.first,
+                    connection,
                     static_cast<uint16_t>(
                         std::max<uint16_t>(client.Session().MaxPduSize(), 3) - 3),
-                    [characteristic, client](const Data& data) {
-                        NotifyClient(characteristic, client, data);
+                    [context, connection, client](const Data& data) {
+                        bool startDrain = false;
+                        {
+                            std::lock_guard<std::mutex> lock(context->notifyMutex);
+                            context->notifyQueue.push_back({ connection, client, data });
+                            if (!context->notifyDraining) {
+                                context->notifyDraining = true;
+                                startDrain = true;
+                            }
+                        }
+                        if (startDrain) {
+                            DrainNotifications(context);
+                        }
                     });
             }
         }
         context->subscribers = std::move(current);
     } catch (...) {
+    }
+}
+
+winrt::fire_and_forget BLEPeripheralManager::DrainNotifications(
+    std::shared_ptr<CharacteristicContext> context) {
+    for (;;) {
+        PendingNotification item;
+        {
+            std::lock_guard<std::mutex> lock(context->notifyMutex);
+            if (context->notifyQueue.empty()) {
+                context->notifyDraining = false;
+                co_return;
+            }
+            item = std::move(context->notifyQueue.front());
+            context->notifyQueue.pop_front();
+        }
+
+        bool success = false;
+        try {
+            const auto result = co_await context->characteristic.NotifyValueAsync(
+                ToBuffer(item.data), item.client);
+            success = result.Status() == GattCommunicationStatus::Success;
+        } catch (...) {
+            // The client may have unsubscribed (or the characteristic been
+            // torn down) between the JS callback and this send; report the
+            // notification as unsuccessful rather than dropping it silently.
+        }
+
+        if (context->emitter) {
+            context->emitter->Notify(item.connection, success);
+        }
     }
 }
 

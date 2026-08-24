@@ -26,7 +26,12 @@ declare module '@stoprocent/bleno' {
     export type OnUnsubscribeFn = (handle: ConnectionHandle) => void;
     export type OnWriteRequestFn = (handle: ConnectionHandle, data: Buffer, offset: number, withoutResponse: boolean, callback: WriteRequestCallback) => void;
     export type OnIndicateFn = (handle: ConnectionHandle) => void;
-    export type OnNotifyFn = (handle: ConnectionHandle) => void;
+    /**
+     * Called when a notification has been sent. On the Windows (WinRT)
+     * binding, `success` carries the per-client result of the completed
+     * NotifyValueAsync; transports that cannot observe completion omit it.
+     */
+    export type OnNotifyFn = (handle: ConnectionHandle, success?: boolean) => void;
 
     export interface CharacteristicOptions {
         uuid: string;
@@ -52,7 +57,7 @@ declare module '@stoprocent/bleno' {
         constructor(options: CharacteristicOptions);
 
         onIndicate(handle: ConnectionHandle): void;
-        onNotify(handle: ConnectionHandle): void;
+        onNotify(handle: ConnectionHandle, success?: boolean): void;
         onReadRequest(handle: ConnectionHandle, offset: number, callback: ReadRequestCallback): void;
         onSubscribe(handle: ConnectionHandle, maxValueSize: number, updateValueCallback: UpdateValueCallback): void;
         onUnsubscribe(handle: ConnectionHandle): void;

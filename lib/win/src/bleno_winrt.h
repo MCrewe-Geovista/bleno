@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <deque>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -68,6 +69,12 @@ private:
     using GattSubscribedClient =
         winrt::Windows::Devices::Bluetooth::GenericAttributeProfile::GattSubscribedClient;
 
+    struct PendingNotification {
+        std::string connection;
+        GattSubscribedClient client{ nullptr };
+        Data data;
+    };
+
     struct CharacteristicContext {
         GattLocalCharacteristic characteristic{ nullptr };
         std::shared_ptr<EmitCharacteristic> emitter;
@@ -78,6 +85,13 @@ private:
         bool hasReadRequested{ false };
         bool hasWriteRequested{ false };
         bool hasSubscribedClientsChanged{ false };
+        // Notifications are queued and sent by a single drain coroutine per
+        // characteristic, in order, one NotifyValueAsync in flight at a time.
+        // The mutex only guards the queue/flag — it is never held across an
+        // await.
+        std::mutex notifyMutex;
+        std::deque<PendingNotification> notifyQueue;
+        bool notifyDraining{ false };
     };
 
     struct ProviderContext {
@@ -106,6 +120,8 @@ private:
         const winrt::Windows::Devices::Bluetooth::GenericAttributeProfile::GattWriteRequestedEventArgs& args);
     void HandleSubscribersChanged(
         const std::shared_ptr<CharacteristicContext>& context) noexcept;
+    static winrt::fire_and_forget DrainNotifications(
+        std::shared_ptr<CharacteristicContext> context);
     static void UnregisterCharacteristic(
         const std::shared_ptr<CharacteristicContext>& context) noexcept;
 

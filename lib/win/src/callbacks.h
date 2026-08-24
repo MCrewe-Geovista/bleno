@@ -48,6 +48,7 @@ public:
         uint16_t maxValueSize,
         std::function<void(const Data&)> completion);
     void Unsubscribe(const std::string& connection);
+    void Notify(const std::string& connection, bool success);
 
 private:
     std::shared_ptr<ThreadSafeCallback> mCallback;

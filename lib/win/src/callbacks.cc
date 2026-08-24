@@ -211,3 +211,13 @@ void EmitCharacteristic::Unsubscribe(const std::string& connection) {
         };
     });
 }
+
+void EmitCharacteristic::Notify(const std::string& connection, bool success) {
+    mCallback->call([connection, success](Napi::Env env, std::vector<napi_value>& args) {
+        args = {
+            Napi::String::New(env, "notify"),
+            Napi::String::New(env, connection),
+            Napi::Boolean::New(env, success),
+        };
+    });
+}
